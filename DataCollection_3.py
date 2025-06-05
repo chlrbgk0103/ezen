@@ -2,7 +2,8 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import oracledb as cx_Oracle
-
+import os
+import glob
 
 # ✅ 정책 상세 정보 섹션 크롤링
 def crawl_all_sections(url):
@@ -29,7 +30,6 @@ def crawl_all_sections(url):
             data_store[section_name] = section_data
     return data_store
 
-
 # ✅ 질문 관련 섹션 찾기
 def find_best_section(question, data_store):
     question_lower = question.lower()
@@ -44,7 +44,6 @@ def find_best_section(question, data_store):
 
     return best_section
 
-
 # ✅ 답변 생성
 def generate_answer(question, data_store):
     section = find_best_section(question, data_store)
@@ -56,7 +55,6 @@ def generate_answer(question, data_store):
     for k, v in content.items():
         answer += f"{k}: {v}\n"
     return answer
-
 
 # ✅ 정책 리스트 크롤링
 def crawl_policy_list(list_url):
@@ -94,8 +92,7 @@ def crawl_policy_list(list_url):
 
     return policy_data
 
-
-# ✅ 정책 ID 기준 중복 체크 (file1 + file3 통합)
+# ✅ 정책 ID 기준 중복 체크
 def load_saved_policy_ids_from_files(*file_paths):
     saved_ids = set()
     id_pattern = re.compile(r"plcyBizId=([^&\s]+)")
@@ -110,18 +107,19 @@ def load_saved_policy_ids_from_files(*file_paths):
             pass
     return saved_ids
 
-
 # ✅ 특수문자 제거
 def remove_special_chars_with_space(text):
     cleaned = re.sub(r"[^가-힣a-zA-Z0-9\s]", " ", text)
     cleaned = " ".join(cleaned.split())
     return cleaned
 
-
-# ✅ 파일3 저장
-def save_policy_result_to_file(file_path, title, questions, data_store):
+# ✅ file3 저장
+#def save_policy_result_to_file(file_path, title, questions, data_store):
+def save_policy_result_to_file(file_path, title, questions, data_store, detail_url):
     with open(file_path, "a", encoding="utf-8") as f:
         f.write('"""' + title + "\n")
+        f.write(detail_url + "\n")  # ✅ URL 추가
+
         for i, q in enumerate(questions):
             result = (
                 generate_answer(q, data_store)
@@ -135,7 +133,6 @@ def save_policy_result_to_file(file_path, title, questions, data_store):
             result = remove_special_chars_with_space(result)
             f.write(result + "\n")
         f.write('"""' + "\n")
-
 
 # ✅ 전체 정책 페이지 순회
 def crawl_all_policy_pages():
@@ -152,16 +149,39 @@ def crawl_all_policy_pages():
     print(f"\n✅ 총 수집된 정책 수: {len(all_policies)}개")
     return all_policies
 
-
 # ✅ 실행
 if __name__ == "__main__":
+    #file1_path = "D:/dochoi/workspace/PythonProject1/my_data_directory/your_data_file1.txt"
+    base_dir = "D:/dochoi/workspace/PythonProject1/policy_directory/"
+    base_file3_name = os.path.join(base_dir, "your_data_file")
 
-    file1_path = "D:/dochoi/workspace/PythonProject1/my_data_directory/your_data_file1.txt"
-    file3_path = "D:/dochoi/workspace/PythonProject1/my_data_directory/your_data_file3.txt"
+    # file3 경로 탐색 (file1 제외)
+    file3_paths = [
+        p for p in glob.glob(os.path.join(base_dir, "your_data_file*.txt"))
+#        if not p.endswith("your_data_file1.txt")
+    ]
+    print("📂 탐색된 file3 경로들:", file3_paths)
 
-    saved_policy_ids = load_saved_policy_ids_from_files(file1_path, file3_path)
+    # file3 인덱스 계산
+    existing_indexes = []
+    for path in file3_paths:
+        match = re.search(r"your_data_file(\d+)\.txt", path)
+        if match:
+            existing_indexes.append(int(match.group(1)))
+
+#    file3_index = max(existing_indexes, default=9) + 1
+    file3_index = max(existing_indexes) + 1
+    file3_path = f"{base_file3_name}{file3_index}.txt"
+    print(f"📁 최초 저장 파일: {file3_path}")
+    save_count = 0
+
+    # 중복 정책 ID 로딩
+    #saved_policy_ids = load_saved_policy_ids_from_files(file1_path, *file3_paths)
+    saved_policy_ids = load_saved_policy_ids_from_files(*file3_paths)
+
     all_policies = crawl_all_policy_pages()
 
+    # 질문 리스트
     test_questions = [
         "사업개요에 대해 알려줘",
         "신청자격은 어떻게 되나요?",
@@ -180,7 +200,6 @@ if __name__ == "__main__":
         policy_id = policy["policy_id"]
         if not policy_id:
             continue
-
         if policy_id in saved_policy_ids:
             print(f"[중복 - ID 기준] '{policy_id}' 이미 저장되어 건너뜀")
             continue
@@ -192,25 +211,33 @@ if __name__ == "__main__":
             res.encoding = 'utf-8'
             soup = BeautifulSoup(res.text, "html.parser")
             policy_title = soup.find("strong", class_="title").get_text(strip=True)
-
             data_store = crawl_all_sections(detail_url)
 
-            with open(file1_path, "a", encoding="utf-8") as f:
-                f.write(f"{policy_title}\n{detail_url}\n\n")
+            # file1 기록
+            #with open(file1_path, "a", encoding="utf-8") as f:
+            #    f.write(f"{policy_title}\n{detail_url}\n\n")
 
-            # ✅ DB INSERT (중복 무시)
+            # DB INSERT
             try:
-                cursor.execute("""
-                    INSERT INTO policies (title, url) VALUES (:1, :2)
-                """, (policy_title, detail_url))
+                cursor.execute("INSERT INTO policies (title, url) VALUES (:1, :2)", (policy_title, detail_url))
+               # cursor.execute("INSERT INTO policies (title, url) VALUES (:1, :2)", (policy_title, detail_url))
                 inserted_count += 1
                 print(f"[INSERT 완료] {policy_title}")
             except cx_Oracle.IntegrityError:
                 print(f"[중복 - DB 기준] {policy_title} 이미 존재하여 건너뜀")
             except Exception as e:
-                print(f"[DB ERROR] 제목 :  {policy_title} | 오류 : {e}")
+                print(f"[DB ERROR] 제목 : {policy_title} | 오류 : {e}")
 
-            save_policy_result_to_file(file3_path, policy_title, test_questions, data_store)
+            # file3 분할 저장
+            if save_count >= 20:
+                file3_index += 1
+                file3_path = f"{base_file3_name}{file3_index}.txt"
+                save_count = 0
+
+            save_policy_result_to_file(file3_path, policy_title, test_questions, data_store, detail_url)
+            print(f"📌 save_count: {save_count} | 현재 파일: {file3_path}")
+
+            save_count += 1
             saved_policy_ids.add(policy_id)
 
         except Exception as e:
